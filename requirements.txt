@@ -1,0 +1,9 @@
+# requirements.txt
+# No specific Python packages are required by the current scripts beyond the standard library.
+# FFmpeg/FFprobe are system dependencies installed via Dockerfile's apt-get.
+
+# If future Python-based techniques require external libraries (e.g., for direct BMFF parsing),
+# they would be listed here, for example:
+# construct
+# bitstring
+# pyisobmff

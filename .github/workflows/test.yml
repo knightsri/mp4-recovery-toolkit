@@ -1,0 +1,58 @@
+name: MP4 Repair Tool Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        python -m pip install --upgrade pip
+    
+    - name: Create test files
+      run: |
+        mkdir -p tests
+        ffmpeg -f lavfi -i testsrc=duration=5:size=1280x720:rate=30 -c:v libx264 -profile:v baseline tests/good.mp4
+        # Create truncated file
+        dd if=tests/good.mp4 of=tests/truncated.mp4 bs=1024 count=$(( $(stat --format="%s" tests/good.mp4) / 1024 * 9 / 10 ))
+        # Create corrupted header file
+        cp tests/good.mp4 tests/corrupted_header.mp4
+        dd if=/dev/zero of=tests/corrupted_header.mp4 bs=1 count=100 conv=notrunc
+    
+    - name: Direct Python test
+      run: |
+        chmod +x mp4_repair.py
+        # Test if good file is correctly identified
+        ./mp4_repair.py tests/good.mp4 tests/good.mp4 tests/output1.mp4
+        # Test repair of truncated file
+        ./mp4_repair.py tests/truncated.mp4 tests/good.mp4 tests/output2.mp4
+        # Verify output exists
+        [ -f tests/output2.mp4 ] || exit 1
+    
+    - name: Build Docker container
+      run: |
+        docker build -t mp4repair .
+    
+    - name: Test Docker container
+      run: |
+        # Test help
+        docker run --rm mp4repair --help
+        # Test repair
+        docker run --rm -v $(pwd)/tests:/data mp4repair /data/truncated.mp4 /data/good.mp4 /data/output3.mp4
+        # Verify output exists
+        [ -f tests/output3.mp4 ] || exit 1
