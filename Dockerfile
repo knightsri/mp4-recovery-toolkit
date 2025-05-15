@@ -1,5 +1,5 @@
 # Use an official Python runtime as a parent image
-FROM python:3.9-slim
+FROM python:3.13-slim
 
 # Set labels for the image
 LABEL maintainer="Your Name <your.email@example.com>"
