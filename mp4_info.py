@@ -2,12 +2,10 @@
 """
 MP4 Parameter Extraction Tool
 
-This utility extracts and displays the key parameters of an MP4 file 
+This utility extracts and displays the key parameters of an MP4 file
 to help with diagnostics and comparison between files.
 
-Author: Your Name
 License: MIT
-GitHub: https://github.com/yourusername/mp4-repair-tool
 
 Usage:
     python mp4_info.py <mp4_file>
