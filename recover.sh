@@ -1,7 +1,6 @@
 #!/bin/bash
 # MP4 Recovery Toolkit - Shell Script (with Docker integration)
 # Builds Docker image, and repairs, analyzes, or batch processes MP4 files.
-# Author: Your Name
 # License: MIT
 
 # --- Configuration ---
@@ -195,19 +194,24 @@ execute_repair_docker() {
         echo "  Technique Option: $TECHNIQUE_OPTION"
     fi
     
-    # Prepare Docker command
-    DOCKER_VOLUMES="-v \"$INPUT_DIR:/input:ro\" -v \"$REF_DIR:/reference:ro\" -v \"$OUTPUT_DIR:/output\""
-    DOCKER_SCRIPT_ARGS="\"/input/$INPUT_FILENAME\" \"/reference/$REF_FILENAME\" \"/output/$OUTPUT_FILENAME\""
-    
+    # Prepare Docker command using array to prevent command injection
+    DOCKER_CMD_ARGS=(docker run --rm
+        -v "$INPUT_DIR:/input:ro"
+        -v "$REF_DIR:/reference:ro"
+        -v "$OUTPUT_DIR:/output"
+        "$FULL_IMAGE_NAME"
+        "/input/$INPUT_FILENAME"
+        "/reference/$REF_FILENAME"
+        "/output/$OUTPUT_FILENAME")
+
     if [ -n "$TECHNIQUE_OPTION" ]; then
-        DOCKER_SCRIPT_ARGS="$DOCKER_SCRIPT_ARGS $TECHNIQUE_OPTION"
+        DOCKER_CMD_ARGS+=($TECHNIQUE_OPTION)
     fi
-    
-    DOCKER_RUN_CMD="docker run --rm $DOCKER_VOLUMES \"$FULL_IMAGE_NAME\" $DOCKER_SCRIPT_ARGS"
-    echo "Running: $DOCKER_RUN_CMD"
-    
-    # Execute the command (eval needed to handle quotes in paths properly)
-    eval $DOCKER_RUN_CMD
+
+    echo "Running: ${DOCKER_CMD_ARGS[*]}"
+
+    # Execute the command securely without eval
+    "${DOCKER_CMD_ARGS[@]}"
     SCRIPT_RUN_ERRORLEVEL=$?
     
     if [ $SCRIPT_RUN_ERRORLEVEL -eq 0 ]; then
@@ -284,19 +288,22 @@ execute_info_docker() {
         echo "  Detailed: Yes"
     fi
     
-    # Prepare Docker command
-    DOCKER_VOLUMES="-v \"$INFO_DIR:/data:ro\""
-    DOCKER_SCRIPT_ARGS="\"/data/$INFO_FILENAME\""
-    
+    # Prepare Docker command using array to prevent command injection
+    DOCKER_CMD_ARGS=(docker run --rm
+        -v "$INFO_DIR:/data:ro"
+        --entrypoint python
+        "$FULL_IMAGE_NAME"
+        /app/mp4_info.py
+        "/data/$INFO_FILENAME")
+
     if [ -n "$DETAILED_OPTION" ]; then
-        DOCKER_SCRIPT_ARGS="$DOCKER_SCRIPT_ARGS $DETAILED_OPTION"
+        DOCKER_CMD_ARGS+=("$DETAILED_OPTION")
     fi
-    
-    DOCKER_RUN_CMD="docker run --rm $DOCKER_VOLUMES --entrypoint python \"$FULL_IMAGE_NAME\" /app/mp4_info.py $DOCKER_SCRIPT_ARGS"
-    echo "Running: $DOCKER_RUN_CMD"
-    
-    # Execute the command (eval needed to handle quotes in paths properly)
-    eval $DOCKER_RUN_CMD
+
+    echo "Running: ${DOCKER_CMD_ARGS[*]}"
+
+    # Execute the command securely without eval
+    "${DOCKER_CMD_ARGS[@]}"
     SCRIPT_RUN_ERRORLEVEL=$?
     
     if [ $SCRIPT_RUN_ERRORLEVEL -eq 0 ]; then
@@ -442,19 +449,24 @@ execute_batch_docker() {
             continue
         fi
         
-        # Prepare Docker command
-        DOCKER_VOLUMES="-v \"$ABS_BATCH_INPUT_DIR:/input:ro\" -v \"$BATCH_REF_DIR:/reference:ro\" -v \"$ABS_BATCH_OUTPUT_DIR:/output\""
-        DOCKER_SCRIPT_ARGS="\"/input/$CURRENT_INPUT_FILENAME\" \"/reference/$BATCH_REF_FILENAME\" \"/output/$CURRENT_OUTPUT_FILENAME\""
-        
+        # Prepare Docker command using array to prevent command injection
+        DOCKER_CMD_ARGS=(docker run --rm
+            -v "$ABS_BATCH_INPUT_DIR:/input:ro"
+            -v "$BATCH_REF_DIR:/reference:ro"
+            -v "$ABS_BATCH_OUTPUT_DIR:/output"
+            "$FULL_IMAGE_NAME"
+            "/input/$CURRENT_INPUT_FILENAME"
+            "/reference/$BATCH_REF_FILENAME"
+            "/output/$CURRENT_OUTPUT_FILENAME")
+
         if [ -n "$BATCH_TECHNIQUE_OPTION" ]; then
-            DOCKER_SCRIPT_ARGS="$DOCKER_SCRIPT_ARGS $BATCH_TECHNIQUE_OPTION"
+            DOCKER_CMD_ARGS+=($BATCH_TECHNIQUE_OPTION)
         fi
-        
-        DOCKER_RUN_CMD="docker run --rm $DOCKER_VOLUMES \"$FULL_IMAGE_NAME\" $DOCKER_SCRIPT_ARGS"
-        echo "    Running: $DOCKER_RUN_CMD"
-        
-        # Execute the command (eval needed to handle quotes in paths properly)
-        eval $DOCKER_RUN_CMD
+
+        echo "    Running: ${DOCKER_CMD_ARGS[*]}"
+
+        # Execute the command securely without eval
+        "${DOCKER_CMD_ARGS[@]}"
         
         if [ $? -eq 0 ]; then
             echo -e "    ${GREEN}SUCCESS: \"$CURRENT_INPUT_FILENAME\" repaired.${NC}"
