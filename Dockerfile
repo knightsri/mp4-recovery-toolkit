@@ -1,14 +1,14 @@
-# Use an official Python runtime as a parent image
-FROM python:3.9-slim
+# Use an official Python runtime as a parent image with pinned version
+FROM python:3.9.18-slim
 
 # Set labels for the image
-LABEL maintainer="Your Name <your.email@example.com>"
 LABEL description="MP4 Recovery Toolkit - Runs a suite of Python scripts to repair and analyze damaged MP4 files using FFmpeg."
-LABEL version="1.2.1"
+LABEL version="1.3.0"
 
-# Install FFmpeg (which includes ffprobe)
+# Install FFmpeg (which includes ffprobe) with version pinning
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
+    apt-get install -y --no-install-recommends \
+    ffmpeg=7:4.3.* && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -24,6 +24,9 @@ COPY mp4_info.py ./mp4_info.py
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Create a non-root user for security
+RUN groupadd -r mp4user && useradd -r -g mp4user -u 1000 mp4user
+
 # Make scripts executable (optional, as we call them with python)
 RUN chmod +x mp4_recovery_master.py mp4_info.py
 
@@ -38,11 +41,17 @@ else\n\
 fi' > /app/entrypoint.sh && \
     chmod +x /app/entrypoint.sh
 
+# Change ownership of app directory to non-root user
+RUN chown -R mp4user:mp4user /app
+
 # Define mount points for data.
 VOLUME ["/data", "/input", "/reference", "/output"]
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
+
+# Switch to non-root user
+USER mp4user
 
 # Set the entrypoint to our wrapper script
 ENTRYPOINT ["/app/entrypoint.sh"]

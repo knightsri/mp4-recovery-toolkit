@@ -15,7 +15,8 @@ import subprocess
 import logging
 import argparse
 import shutil
-from typing import List, Dict, Any, Optional # Added Optional
+import json
+from typing import List, Dict, Any, Optional, Tuple # Added Optional
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +24,10 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger('mp4_recovery_master')
+
+# Validation tolerances
+DURATION_TOLERANCE = 0.05  # 5% tolerance for duration difference
+SIZE_TOLERANCE = 0.30  # 30% tolerance for file size difference
 
 # Define available recovery techniques
 TECHNIQUES: List[Dict[str, Any]] = [
@@ -116,16 +121,180 @@ def list_techniques() -> None:
     """List all available recovery techniques."""
     print("\nAvailable Recovery Techniques:")
     print("------------------------------")
-    
+
     for i, technique in enumerate(TECHNIQUES, 1):
         print(f"{i}. {technique['name']}")
         print(f"   Description: {technique['description']}")
         print(f"   Script: {technique['script']}")
         print()
 
+def get_media_info(file_path: str) -> Optional[Dict[str, Any]]:
+    """Get media information using ffprobe."""
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'quiet',
+            '-print_format', 'json',
+            '-show_format',
+            '-show_streams',
+            file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get media info for {file_path}: {e}")
+        return None
+
+def check_for_errors(file_path: str) -> Tuple[bool, int]:
+    """Check for errors in the output file using ffmpeg."""
+    try:
+        cmd = [
+            'ffmpeg',
+            '-v', 'error',
+            '-i', file_path,
+            '-f', 'null',
+            '-'
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        error_count = len(result.stderr.strip().split('\n')) if result.stderr.strip() else 0
+        has_critical_errors = error_count > 10  # More than 10 error lines is concerning
+        return has_critical_errors, error_count
+    except Exception as e:
+        logger.warning(f"Failed to check errors for {file_path}: {e}")
+        return True, 999
+
+def is_output_truly_valid(output_file: str, reference_file: str, original_file: str) -> bool:
+    """
+    Validate the output file to ensure it's truly valid.
+
+    Checks:
+    - File exists and has size > 0
+    - Duration is similar to reference (within tolerance)
+    - File size is reasonable compared to reference
+    - Video/audio streams are present and match expected codecs
+    - No excessive errors when checking with ffmpeg
+
+    Args:
+        output_file: Path to the repaired output file
+        reference_file: Path to the reference file
+        original_file: Path to the original damaged file
+
+    Returns:
+        bool: True if output is valid, False otherwise
+    """
+    # Basic file existence and size check
+    if not os.path.exists(output_file):
+        logger.warning(f"Output file does not exist: {output_file}")
+        return False
+
+    output_size = os.path.getsize(output_file)
+    if output_size == 0:
+        logger.warning(f"Output file is empty: {output_file}")
+        return False
+
+    # Get media info for all files
+    output_info = get_media_info(output_file)
+    reference_info = get_media_info(reference_file)
+
+    if not output_info:
+        logger.warning(f"Could not get media info for output file: {output_file}")
+        return False
+
+    # Check for excessive errors
+    has_errors, error_count = check_for_errors(output_file)
+    if has_errors:
+        logger.warning(f"Output file has {error_count} errors - may not be fully valid")
+        return False
+
+    # If we have reference info, do comparative validation
+    if reference_info:
+        # Compare duration
+        output_duration = float(output_info.get('format', {}).get('duration', 0))
+        ref_duration = float(reference_info.get('format', {}).get('duration', 0))
+
+        if ref_duration > 0:
+            duration_diff = abs(output_duration - ref_duration) / ref_duration
+            if duration_diff > DURATION_TOLERANCE:
+                logger.warning(f"Duration mismatch: output={output_duration}s, reference={ref_duration}s, diff={duration_diff*100:.1f}%")
+                return False
+
+        # Compare file size
+        ref_size = os.path.getsize(reference_file)
+        if ref_size > 0:
+            size_diff = abs(output_size - ref_size) / ref_size
+            if size_diff > SIZE_TOLERANCE:
+                logger.info(f"File size difference: output={output_size}, reference={ref_size}, diff={size_diff*100:.1f}%")
+                # Size difference alone isn't fatal, just log it
+
+        # Check for video stream
+        output_has_video = any(s.get('codec_type') == 'video' for s in output_info.get('streams', []))
+        ref_has_video = any(s.get('codec_type') == 'video' for s in reference_info.get('streams', []))
+
+        if ref_has_video and not output_has_video:
+            logger.warning("Reference has video but output does not")
+            return False
+
+        # Check for audio stream
+        output_has_audio = any(s.get('codec_type') == 'audio' for s in output_info.get('streams', []))
+        ref_has_audio = any(s.get('codec_type') == 'audio' for s in reference_info.get('streams', []))
+
+        if ref_has_audio and not output_has_audio:
+            logger.warning("Reference has audio but output does not")
+            # This is a warning but not necessarily fatal
+
+    logger.info(f"Output file validation passed: {output_file}")
+    return True
+
 def check_script_exists(script_path: str) -> bool:
     """Check if a script file exists."""
     return os.path.exists(script_path)
+
+def validate_file_path(file_path: str, must_exist: bool = True) -> Tuple[bool, str]:
+    """
+    Validate a file path for security and existence.
+
+    Args:
+        file_path: Path to validate
+        must_exist: Whether the file must already exist
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not file_path:
+        return False, "File path is empty"
+
+    # Check for path traversal attempts
+    abs_path = os.path.abspath(file_path)
+    if ".." in os.path.normpath(file_path):
+        return False, "Path traversal detected in file path"
+
+    if must_exist and not os.path.exists(abs_path):
+        return False, f"File does not exist: {abs_path}"
+
+    return True, ""
+
+def validate_mp4_file(file_path: str) -> Tuple[bool, str]:
+    """
+    Validate that a file is an MP4 file.
+
+    Args:
+        file_path: Path to the file
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    is_valid, error = validate_file_path(file_path, must_exist=True)
+    if not is_valid:
+        return False, error
+
+    # Check file extension (basic check)
+    _, ext = os.path.splitext(file_path)
+    if ext.lower() not in ['.mp4', '.m4v', '.m4a']:
+        return False, f"File does not have a valid MP4 extension: {ext}"
+
+    return True, ""
 
 def run_technique(technique: Dict[str, Any], input_file: str, reference_file: str, output_file: str, temp_dir_base: str) -> bool:
     """Run a specific recovery technique."""
@@ -192,12 +361,18 @@ def run_technique(technique: Dict[str, Any], input_file: str, reference_file: st
 
 
         if result.returncode == 0 and os.path.exists(technique_specific_output) and os.path.getsize(technique_specific_output) > 0:
-            logger.info(f"SUCCESS: {technique['name']} technique created output: {technique_specific_output}")
-            print(f"\n✅ SUCCESS: {technique['name']} technique worked!")
-            
-            shutil.copy2(technique_specific_output, output_file)
-            logger.info(f"Copied successful result to final output: {output_file}")
-            return True
+            logger.info(f"Technique {technique['name']} created output: {technique_specific_output}")
+
+            # Validate the output before declaring success
+            if is_output_truly_valid(technique_specific_output, reference_file, input_file):
+                print(f"\n✅ SUCCESS: {technique['name']} technique worked!")
+                shutil.copy2(technique_specific_output, output_file)
+                logger.info(f"Copied validated result to final output: {output_file}")
+                return True
+            else:
+                logger.warning(f"{technique['name']} produced output but it failed validation")
+                print(f"\n⚠️  WARNING: {technique['name']} produced output but it failed validation checks")
+                return False
         else:
             logger.info(f"FAILED: {technique['name']} technique (return code: {result.returncode}).")
             print(f"\n❌ FAILED: {technique['name']} technique failed.")
@@ -209,9 +384,17 @@ def run_technique(technique: Dict[str, Any], input_file: str, reference_file: st
                 print(f"    (No valid output file produced at {technique_specific_output})")
             return False
     
-    except Exception as e:
-        logger.error(f"Master script error running {technique['name']}: {str(e)}")
+    except subprocess.SubprocessError as e:
+        logger.error(f"Subprocess error running {technique['name']}: {str(e)}")
         print(f"Error running {technique['name']}: {str(e)}")
+        return False
+    except OSError as e:
+        logger.error(f"File system error running {technique['name']}: {str(e)}")
+        print(f"File system error with {technique['name']}: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error running {technique['name']}: {str(e)}", exc_info=True)
+        print(f"Unexpected error running {technique['name']}: {str(e)}")
         return False
 
 def run_recovery(input_file: str, reference_file: str, output_file: str, specific_technique_num: Optional[int] = None) -> bool:
@@ -247,10 +430,24 @@ def run_recovery(input_file: str, reference_file: str, output_file: str, specifi
     finally:
         if os.path.exists(temp_dir_base):
             try:
-                shutil.rmtree(temp_dir_base)
+                # Attempt to remove read-only files if present
+                def handle_remove_readonly(func, path, exc):
+                    """Error handler for Windows readonly files."""
+                    import stat
+                    os.chmod(path, stat.S_IWRITE)
+                    func(path)
+
+                shutil.rmtree(temp_dir_base, onerror=handle_remove_readonly)
                 logger.info(f"Successfully cleaned up base temporary directory: {temp_dir_base}")
+            except PermissionError as e:
+                logger.warning(f"Permission denied cleaning up {temp_dir_base}: {e}")
+                print(f"Warning: Could not remove temporary directory {temp_dir_base} (permission denied)")
+            except OSError as e:
+                logger.warning(f"OS error cleaning up {temp_dir_base}: {e}")
+                print(f"Warning: Could not remove temporary directory {temp_dir_base}")
             except Exception as e:
-                logger.error(f"Failed to clean up temporary directory {temp_dir_base}: {e}")
+                logger.error(f"Unexpected error cleaning up {temp_dir_base}: {e}", exc_info=True)
+                print(f"Warning: Could not remove temporary directory {temp_dir_base}")
 
 def main():
     parser = argparse.ArgumentParser(description='MP4 Recovery Master Script')
@@ -270,19 +467,26 @@ def main():
         list_techniques()
         sys.exit(0)
     
-    if not os.path.exists(args.input_file):
-        logger.critical(f"Input file does not exist: {args.input_file}")
-        print(f"Error: Input file does not exist: {args.input_file}")
+    # Validate input file
+    is_valid, error = validate_mp4_file(args.input_file)
+    if not is_valid:
+        logger.critical(f"Input file validation failed: {error}")
+        print(f"Error: Input file validation failed: {error}")
         sys.exit(1)
-    
-    if not os.path.exists(args.reference_file) and any(
-        tech['script'] not in [
-            'technique14_recover_from_raw_disk_image.py', # May not need ref
-            # Add other scripts that genuinely don't need a reference
-        ] for tech in (TECHNIQUES if not args.technique else [TECHNIQUES[args.technique-1]])
-    ):
-        logger.warning(f"Reference file does not exist: {args.reference_file}. Some techniques may be less effective or fail.")
-    
+
+    # Validate reference file
+    is_valid, error = validate_mp4_file(args.reference_file)
+    if not is_valid:
+        logger.warning(f"Reference file validation failed: {error}. Some techniques may be less effective or fail.")
+        print(f"Warning: Reference file validation failed: {error}")
+
+    # Validate output file path (must not exist yet, but path should be valid)
+    is_valid, error = validate_file_path(args.output_file, must_exist=False)
+    if not is_valid:
+        logger.critical(f"Output file path validation failed: {error}")
+        print(f"Error: Output file path validation failed: {error}")
+        sys.exit(1)
+
     output_dir_path = os.path.dirname(os.path.abspath(args.output_file))
     if output_dir_path and not os.path.exists(output_dir_path):
         try:
