@@ -1,5 +1,5 @@
 # Use an official Python runtime as a parent image with pinned version
-FROM python:3.9.18-slim
+FROM python:3.14.2-slim
 
 # Set labels for the image
 LABEL description="MP4 Recovery Toolkit - Runs a suite of Python scripts to repair and analyze damaged MP4 files using FFmpeg."
